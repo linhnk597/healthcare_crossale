@@ -1,0 +1,150 @@
+---
+title: "Healthcare Cross-Sell"
+author: "Linh Nguyen"
+date: "11/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+#Import data and library
+library(caret)
+library(pROC)
+library(gains)
+library(ggplot2)
+library(skimr)
+library(sqldf)
+library(data.table)
+library(mltools)
+insurance = read.csv("C:/Users/LINH/Desktop/Coding classes/Challenges/Healthcare Insurance CrossSell/train.csv",header=TRUE,na.strings = c(""))
+insurance_test = read.csv("C:/Users/LINH/Desktop/Coding classes/Challenges/Healthcare Insurance CrossSell/test.csv", header=TRUE,na.strings = c(""))
+```
+
+```{r}
+#omit ID column
+insurance = insurance[2:12]
+head(insurance,5)
+str(insurance)
+```
+
+```{r}
+#Check missing data (if have), change the data types of columns Gender, Driving_License, Region_Code, Previously_Insured, Vehicle_Age, Vehicle_Damage, Policy_Sales_Channel into factor
+to.factor = function(df, variables){
+  for (variable in variables){
+    df[[variable]] <- as.factor(df[[variable]])}
+  return(df)
+}
+cat_variables = c('Gender', 'Driving_License', 'Region_Code', 'Previously_Insured', 'Vehicle_Age','Vehicle_Damage', 'Response', 'Policy_Sales_Channel')
+insurance = to.factor(df=insurance,variables=cat_variables)
+str(insurance)
+head(insurance,5)
+```
+```{r}
+#Customers segmentation for age, vintage, gender, annual_premium, vehicle_damage, vehicle_age
+a= ggplot(data=insurance)
+print(a+ geom_histogram(binwidth = 10,
+                        color="black",aes(x=Age,fill=Response)))
+print(a+ geom_histogram(binwidth=10,
+                        color="black",aes(x=Vintage,fill=Response)))
+print(a+ geom_bar(color="black",aes(y=Gender,fill=Response)))
+print(a+ geom_bar(color="black",aes(y=Vehicle_Damage,fill=Response)))
+print(a+ geom_bar(color="black",aes(y=Vehicle_Age,fill=Response)))
+print(a+geom_histogram(bins=30,color="black",aes(x=Annual_Premium/1000,
+                                                 fill=Response)))
+
+
+```
+
+```{r}
+#customer segmentation for policy_sales_channel and region_code - Instead of using bar chart,we use table instead due to the huge number of levels in these variables.
+
+print(sqldf("SELECT Region_Code, COUNT(*) AS total FROM insurance WHERE Response=1 GROUP BY Region_Code ORDER BY total DESC LIMIT 10"))
+
+print(sqldf("SELECT Policy_Sales_Channel, COUNT(*) AS total FROM insurance WHERE Response=1 GROUP BY Policy_Sales_Channel ORDER BY total DESC LIMIT 10"))
+
+
+
+```
+
+```{r}
+#Logistic Regression works best with numeric so I will transform predictors into numerics
+#[Gender] - Male= 1, Female= 0.
+#[Age]
+#[Driving_License].
+#[Region_Code]
+#[Previously_Insured].
+#[Vehicle_Age] - One-hot/ Dummy variable
+#[Vehicle_Damage]- Yes=1, No=0.
+#[Annual_Premium]
+#[Policy_Sales_Channel]
+#[Vintage]
+#[Response]
+insurance$Gender=as.numeric(as.character(factor(insurance$Gender,levels=c("Male","Female"),labels=c("1","0"))))
+insurance$Vehicle_Damage=as.numeric(as.character(factor(insurance$Vehicle_Damage,levels=c("Yes","No"),labels=c("1","0"))))
+insurance$Previously_Insured=as.numeric(as.character(insurance$Previously_Insured))
+insurance$Driving_License=as.numeric(as.character(insurance$Driving_License))
+insurance$Region_Code = as.numeric(as.character(insurance$Region_Code))
+insurance$Policy_Sales_Channel=as.numeric(as.character(insurance$Policy_Sales_Channel))
+ins_year <- one_hot(as.data.table(insurance$Vehicle_Age))
+insurance$Vehicle_Age = NULL
+insurance = data.frame(insurance,ins_year)
+insurance = insurance[,c(1,2,3,4,5,6,7,8,9,11,12,13,10)]
+head(insurance,5)
+str(insurance)
+
+```
+```{r}
+#Feature Scaling the dataset
+
+insurance[c(2,7,9)] = scale(insurance[c(2,7,9)])
+head(insurance,3)
+
+```
+
+```{r}
+#Spread the dataset into 2 sets: training (60%) and validation (40%)
+set.seed(1)
+myIndex= createDataPartition(insurance$Response,p=0.6, list= FALSE)
+trainSet = insurance[myIndex,]
+validationSet = insurance[-myIndex,]
+
+
+```
+
+```{r}
+#Run logistic regression model
+#Use cross validation method with k=10
+
+ins_logit = glm(data=trainSet, formula = Response~., family=binomial(link="logit"))
+ins_prob_pred1 = predict(ins_logit,validationSet,type="response")
+ins_pred1= ifelse(ins_prob_pred1>=0.3,1,0)
+ins_pred1=as.factor(ins_pred1)
+confusionMatrix(ins_pred1,validationSet$Response,positive = "1")
+```
+```{r}
+#ROC curve
+roc_object= roc(validationSet$Response,ins_prob_pred1)
+plot.roc(roc_object)
+auc(roc_object)
+```
+
+```{r}
+install.packages("xgboost")
+library(xgboost)
+```
+```{r}
+ins_xgboost = xgboost(data=as.matrix(trainSet[-13]),
+                      label = trainSet$Response, nrounds= 10)
+ins_pred2 = predict(ins_xgboost,newdata= as.matrix(validationSet[-13]))
+ins_pred2
+```
+
